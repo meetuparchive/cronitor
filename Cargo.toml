@@ -1,0 +1,11 @@
+[package]
+name = "cronitor"
+version = "0.1.0"
+authors = ["softprops <d.tangren@gmail.com>"]
+
+[dependencies]
+rusoto_core = "0.32"
+rusoto_events = "0.32"
+rusoto_ecs = "0.32"
+rusoto_cloudwatch = "0.32"
+chrono = "0.4"

@@ -79,7 +79,7 @@ fn main() {
                 println!("inspecting tasks for {}", arn);
                 let tasks = ecs.list_tasks(&ListTasksRequest {
                     cluster: Some(cluster.clone()),
-                    desired_status: Some("RUNNING".into()),
+                    desired_status: Some("STOPPED".into()),
                     started_by: Some(format!("events-rule/{}", rule)[..36].into()),
                     ..Default::default()
                 }).sync()

@@ -26,7 +26,7 @@ fn get_ecs_task_def_arn(events: &CloudWatchEvents, rule_name: &str) -> Option<St
                 .unwrap_or_default()
                 .into_iter()
                 .filter_map(|target| target.ecs_parameters.map(|ecs| ecs.task_definition_arn))
-                .nth(0)
+                .next()
         })
         .ok()
         .unwrap_or_default()
@@ -56,7 +56,7 @@ fn get_last_trigger(metrics: &CloudWatch, rule_name: &str, since: Duration) -> O
                 .datapoints
                 .unwrap_or_default()
                 .into_iter()
-                .nth(0)
+                .last()
                 .and_then(move |dp| dp.timestamp)
         })
         .ok()
@@ -103,11 +103,10 @@ fn main() {
                 );
             }
         }
-        (a, b) => {
-            println!("{:?} {:?}", a, b);
+        _ => {
             eprintln!(
                 "usage: {} <rule_name> <cluster_name>",
-                env::args().nth(0).unwrap_or_default()
+                env::args().next().unwrap_or_default()
             );
         }
     }

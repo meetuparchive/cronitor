@@ -4,14 +4,20 @@ extern crate rusoto_core;
 extern crate rusoto_ecs;
 extern crate rusoto_events;
 
-use std::env;
-
 use chrono::prelude::*;
 use rusoto_cloudwatch::{CloudWatch, CloudWatchClient, Dimension, GetMetricStatisticsInput};
+use rusoto_core::{credential::ChainProvider, request::HttpClient};
 use rusoto_ecs::{DescribeTasksRequest, Ecs, EcsClient, ListTasksRequest};
 use rusoto_events::{CloudWatchEvents, CloudWatchEventsClient, ListTargetsByRuleRequest};
+use std::{env, time::Duration as StdDuration};
 
 use chrono::Duration;
+
+fn credentials() -> ChainProvider {
+    let mut chain = ChainProvider::new();
+    chain.set_timeout(StdDuration::from_millis(200));
+    chain
+}
 
 fn get_ecs_task_def_arn(
     events: &CloudWatchEvents,
@@ -72,9 +78,23 @@ fn get_last_trigger(
 }
 
 fn main() {
-    let events = CloudWatchEventsClient::new(Default::default());
-    let metrics = CloudWatchClient::new(Default::default());
-    let ecs = EcsClient::new(Default::default());
+    let creds = credentials();
+
+    let events = CloudWatchEventsClient::new_with(
+        HttpClient::new().expect("failed to create request dispatcher"),
+        creds.clone(),
+        Default::default(),
+    );
+    let metrics = CloudWatchClient::new_with(
+        HttpClient::new().expect("failed to create request dispatcher"),
+        creds.clone(),
+        Default::default(),
+    );
+    let ecs = EcsClient::new_with(
+        HttpClient::new().expect("failed to create request dispatcher"),
+        creds,
+        Default::default(),
+    );
 
     match (env::args().nth(1), env::args().nth(2)) {
         (Some(rule), Some(cluster)) => {

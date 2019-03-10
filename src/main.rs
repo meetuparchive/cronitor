@@ -1,9 +1,3 @@
-extern crate chrono;
-extern crate rusoto_cloudwatch;
-extern crate rusoto_core;
-extern crate rusoto_ecs;
-extern crate rusoto_events;
-
 use chrono::prelude::*;
 use rusoto_cloudwatch::{CloudWatch, CloudWatchClient, Dimension, GetMetricStatisticsInput};
 use rusoto_core::{credential::ChainProvider, request::HttpClient};

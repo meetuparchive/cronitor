@@ -1,11 +1,19 @@
-use chrono::prelude::*;
+use chrono::{prelude::*, Duration};
 use rusoto_cloudwatch::{CloudWatch, CloudWatchClient, Dimension, GetMetricStatisticsInput};
 use rusoto_core::{credential::ChainProvider, request::HttpClient};
 use rusoto_ecs::{DescribeTasksRequest, Ecs, EcsClient, ListTasksRequest};
 use rusoto_events::{CloudWatchEvents, CloudWatchEventsClient, ListTargetsByRuleRequest};
-use std::{env, time::Duration as StdDuration};
+use std::time::Duration as StdDuration;
+use structopt::StructOpt;
 
-use chrono::Duration;
+#[derive(StructOpt)]
+#[structopt(name = "cronitor", about = "tool for introspecting AWS ECS crons")]
+struct Options {
+    #[structopt(short = "r", long = "rule", help = "name of Cloud Watch event rule")]
+    rule: String,
+    #[structopt(short = "c", long = "cluster", help = "ECS cluster name")]
+    cluster: String,
+}
 
 fn credentials() -> ChainProvider {
     let mut chain = ChainProvider::new();
@@ -72,6 +80,8 @@ fn get_last_trigger(
 }
 
 fn main() {
+    let Options { rule, cluster } = Options::from_args();
+
     let creds = credentials();
 
     let events = CloudWatchEventsClient::new_with(
@@ -89,50 +99,39 @@ fn main() {
         creds,
         Default::default(),
     );
+    println!(
+        "{:#?}",
+        get_last_trigger(&metrics, rule.as_str(), Duration::weeks(1))
+    );
+    let task_def = get_ecs_task_def_arn(&events, rule.as_str());
+    if let Some(arn) = task_def {
+        println!("inspecting tasks for {}", arn);
+        let tasks = ecs
+            .list_tasks(ListTasksRequest {
+                cluster: Some(cluster.clone()),
+                desired_status: Some("STOPPED".into()),
+                started_by: Some(format!("events-rule/{}", rule)[..36].into()),
+                ..ListTasksRequest::default()
+            })
+            .sync()
+            .ok()
+            .and_then(|response| {
+                ecs.describe_tasks(DescribeTasksRequest {
+                    cluster: Some(cluster.clone()),
+                    tasks: response.task_arns.unwrap_or_default(),
+                })
+                .sync()
+                .map(|response| response.tasks.unwrap_or_default())
+                .ok()
+            })
+            .unwrap_or_default();
 
-    match (env::args().nth(1), env::args().nth(2)) {
-        (Some(rule), Some(cluster)) => {
-            println!(
-                "{:#?}",
-                get_last_trigger(&metrics, rule.as_str(), Duration::weeks(1))
-            );
-            let task_def = get_ecs_task_def_arn(&events, rule.as_str());
-            if let Some(arn) = task_def {
-                println!("inspecting tasks for {}", arn);
-                let tasks = ecs
-                    .list_tasks(ListTasksRequest {
-                        cluster: Some(cluster.clone()),
-                        desired_status: Some("STOPPED".into()),
-                        started_by: Some(format!("events-rule/{}", rule)[..36].into()),
-                        ..ListTasksRequest::default()
-                    })
-                    .sync()
-                    .ok()
-                    .and_then(|response| {
-                        ecs.describe_tasks(DescribeTasksRequest {
-                            cluster: Some(cluster.clone()),
-                            tasks: response.task_arns.unwrap_or_default(),
-                        })
-                        .sync()
-                        .map(|response| response.tasks.unwrap_or_default())
-                        .ok()
-                    })
-                    .unwrap_or_default();
-
-                println!(
-                    "matched tasks {:#?}",
-                    tasks
-                        .into_iter()
-                        .map(|task| task.task_definition_arn.clone().unwrap_or_default())
-                        .collect::<Vec<_>>()
-                );
-            }
-        }
-        _ => {
-            eprintln!(
-                "usage: {} <rule_name> <ecs_cluster_name>",
-                env::args().next().unwrap_or_default()
-            );
-        }
+        println!(
+            "matched tasks {:#?}",
+            tasks
+                .into_iter()
+                .map(|task| task.task_definition_arn.clone().unwrap_or_default())
+                .collect::<Vec<_>>()
+        );
     }
 }

@@ -5,8 +5,9 @@ authors = ["softprops <d.tangren@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-rusoto_core = "0.36"
-rusoto_events = "0.36"
-rusoto_ecs = "0.36"
-rusoto_cloudwatch = "0.36"
 chrono = "0.4"
+rusoto_cloudwatch = "0.36"
+rusoto_core = "0.36"
+rusoto_ecs = "0.36"
+rusoto_events = "0.36"
+structopt = "0.2"

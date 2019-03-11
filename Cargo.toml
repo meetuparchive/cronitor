@@ -6,8 +6,11 @@ edition = "2018"
 
 [dependencies]
 chrono = "0.4"
+failure = "0.1"
+futures = "0.1"
 rusoto_cloudwatch = "0.36"
 rusoto_core = "0.36"
 rusoto_ecs = "0.36"
 rusoto_events = "0.36"
 structopt = "0.2"
+tokio = "0.1"

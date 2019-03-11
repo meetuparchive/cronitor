@@ -1,15 +1,21 @@
 use chrono::{prelude::*, Duration};
+use futures::{future::join_all, Future};
 use rusoto_cloudwatch::{CloudWatch, CloudWatchClient, Dimension, GetMetricStatisticsInput};
 use rusoto_core::{credential::ChainProvider, request::HttpClient};
 use rusoto_ecs::{DescribeTasksRequest, Ecs, EcsClient, ListTasksRequest};
-use rusoto_events::{CloudWatchEvents, CloudWatchEventsClient, ListTargetsByRuleRequest};
+use rusoto_events::{CloudWatchEvents, CloudWatchEventsClient, ListRulesRequest};
 use std::time::Duration as StdDuration;
 use structopt::StructOpt;
+use tokio::runtime::Runtime;
 
 #[derive(StructOpt)]
 #[structopt(name = "cronitor", about = "tool for introspecting AWS ECS crons")]
 struct Options {
-    #[structopt(short = "r", long = "rule", help = "name of Cloud Watch event rule")]
+    #[structopt(
+        short = "r",
+        long = "rule",
+        help = "name of Cloud Watch event rule or rule prefix"
+    )]
     rule: String,
     #[structopt(short = "c", long = "cluster", help = "ECS cluster name")]
     cluster: String,
@@ -21,42 +27,20 @@ fn credentials() -> ChainProvider {
     chain
 }
 
-fn get_ecs_task_def_arn(
-    events: &CloudWatchEvents,
-    rule_name: &str,
-) -> Option<String> {
-    events
-        .list_targets_by_rule(ListTargetsByRuleRequest {
-            rule: rule_name.into(),
-            ..ListTargetsByRuleRequest::default()
-        })
-        .sync()
-        .map(|response| {
-            response
-                .targets
-                .unwrap_or_default()
-                .into_iter()
-                .filter_map(|target| target.ecs_parameters.map(|ecs| ecs.task_definition_arn))
-                .next()
-        })
-        .ok()
-        .unwrap_or_default()
-}
-
 /// get the timestamp of the last time a given rule triggered an event
 /// https://docs.aws.amazon.com/AmazonCloudWatch/latest/monitoring/cwe-metricscollected.html
 fn get_last_trigger(
-    metrics: &CloudWatch,
-    rule_name: &str,
+    metrics: std::sync::Arc<CloudWatchClient>,
+    rule: &str,
     since: Duration,
-) -> Option<String> {
+) -> impl Future<Item = Option<String>, Error = String> {
     let now = Utc::now();
     let start = now - since;
     metrics
         .get_metric_statistics(GetMetricStatisticsInput {
             dimensions: Some(vec![Dimension {
                 name: "RuleName".into(),
-                value: rule_name.into(),
+                value: rule.into(),
             }]),
             end_time: now.to_rfc3339(),
             metric_name: "TriggeredRules".into(),
@@ -66,7 +50,7 @@ fn get_last_trigger(
             statistics: Some(vec!["Sum".into()]),
             ..GetMetricStatisticsInput::default()
         })
-        .sync()
+        .map_err(|e| e.to_string())
         .map(|response| {
             response
                 .datapoints
@@ -75,13 +59,11 @@ fn get_last_trigger(
                 .last()
                 .and_then(move |dp| dp.timestamp)
         })
-        .ok()
-        .unwrap_or_default()
 }
 
 fn main() {
     let Options { rule, cluster } = Options::from_args();
-
+    let mut rt = Runtime::new().expect("failed to create runtime");
     let creds = credentials();
 
     let events = CloudWatchEventsClient::new_with(
@@ -99,39 +81,52 @@ fn main() {
         creds,
         Default::default(),
     );
-    println!(
-        "{:#?}",
-        get_last_trigger(&metrics, rule.as_str(), Duration::weeks(1))
-    );
-    let task_def = get_ecs_task_def_arn(&events, rule.as_str());
-    if let Some(arn) = task_def {
-        println!("inspecting tasks for {}", arn);
-        let tasks = ecs
-            .list_tasks(ListTasksRequest {
+
+    let rules = events
+        .list_rules(ListRulesRequest {
+            name_prefix: Some(rule.clone()),
+            ..ListRulesRequest::default()
+        })
+        .map_err(|e| e.to_string())
+        .map(|result| {
+            result
+                .rules
+                .unwrap_or_default()
+                .into_iter()
+                .map(|rule| rule.name.unwrap_or_default())
+                .collect::<Vec<_>>()
+        });
+
+    let last_triggers = rules.and_then(move |names| {
+        let mets = std::sync::Arc::new(metrics);
+        join_all(names.into_iter().map(move |name| {
+            get_last_trigger(mets.clone(), name.as_str(), Duration::weeks(1)).map(|ts| (name, ts))
+        }))
+    });
+
+    let stopped_tasks = last_triggers.and_then(move |triggers| {
+        let ecss = std::sync::Arc::new(ecs);
+        join_all(triggers.into_iter().map(move |(rule, last)| {
+            let cluster = cluster.clone();
+            let ecs = ecss.clone();
+            let ecs2 = ecss.clone();
+            ecs.list_tasks(ListTasksRequest {
                 cluster: Some(cluster.clone()),
                 desired_status: Some("STOPPED".into()),
                 started_by: Some(format!("events-rule/{}", rule).chars().take(36).collect()),
                 ..ListTasksRequest::default()
             })
-            .sync()
-            .ok()
-            .and_then(|response| {
-                ecs.describe_tasks(DescribeTasksRequest {
-                    cluster: Some(cluster.clone()),
+            .map_err(|e| e.to_string())
+            .and_then(move |response| {
+                ecs2.describe_tasks(DescribeTasksRequest {
+                    cluster: Some(cluster),
                     tasks: response.task_arns.unwrap_or_default(),
                 })
-                .sync()
-                .map(|response| response.tasks.unwrap_or_default())
-                .ok()
+                .map_err(|e| e.to_string())
+                .map(|result| (rule, last, result.tasks.unwrap_or_default()))
             })
-            .unwrap_or_default();
+        }))
+    });
 
-        println!(
-            "matched tasks {:#?}",
-            tasks
-                .into_iter()
-                .map(|task| task.task_definition_arn.clone().unwrap_or_default())
-                .collect::<Vec<_>>()
-        );
-    }
+    println!("{:#?}", rt.block_on(stopped_tasks));
 }

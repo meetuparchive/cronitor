@@ -110,7 +110,7 @@ fn main() {
             .list_tasks(ListTasksRequest {
                 cluster: Some(cluster.clone()),
                 desired_status: Some("STOPPED".into()),
-                started_by: Some(format!("events-rule/{}", rule)[..36].into()),
+                started_by: Some(format!("events-rule/{}", rule).chars().take(36).collect()),
                 ..ListTasksRequest::default()
             })
             .sync()
